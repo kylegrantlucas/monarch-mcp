@@ -120,35 +120,57 @@ def _handle_mcp_errors(operation: str):
 # ── Client helpers ─────────────────────────────────────────────────────
 
 async def _get_monarch_client() -> MonarchMoney:
-    """Get or create MonarchMoney client instance using secure session storage."""
-    # Try to get authenticated client from secure session
-    client = secure_session.get_authenticated_client()
+    """Get or create a MonarchMoney client instance.
 
+    Resolution order:
+      1. In-process cached client (set after a successful login) — avoids a
+         fresh login on every tool call.
+      2. Token from the system keyring (desktop / browser-auth flow).
+      3. Environment credentials (``MONARCH_EMAIL`` / ``MONARCH_PASSWORD``,
+         with optional ``MONARCH_MFA_SECRET`` for non-interactive TOTP) — the
+         headless path. Requests a trusted-device (long-lived) token, so the
+         cached client rarely needs to re-authenticate.
+      4. Browser login flow (interactive desktop only).
+    """
+    # 1. In-process cache (avoids re-login on every tool call)
+    cached = secure_session.get_runtime_client()
+    if cached is not None:
+        return cached
+
+    # 2. Token from secure keyring storage
+    client = secure_session.get_authenticated_client()
     if client is not None:
         logger.info("Using authenticated client from secure keyring storage")
+        secure_session.set_runtime_client(client)
         return client
 
-    # If no secure session, try environment credentials
+    # 3. Environment credentials (headless). MONARCH_MFA_SECRET enables
+    #    non-interactive TOTP login.
     email = os.getenv("MONARCH_EMAIL")
     password = os.getenv("MONARCH_PASSWORD")
+    mfa_secret = os.getenv("MONARCH_MFA_SECRET")
 
     if email and password:
         try:
             client = MonarchMoney()
-            await client.login(email, password)
-            logger.info(
-                "Successfully logged into Monarch Money with environment credentials"
+            await client.login(
+                email,
+                password,
+                use_saved_session=False,
+                save_session=False,
+                mfa_secret_key=mfa_secret or None,
             )
-
-            # Save the session securely
-            secure_session.save_authenticated_session(client)
-
+            logger.info(
+                "Logged into Monarch Money with environment credentials (MFA: %s)",
+                "yes" if mfa_secret else "no",
+            )
+            secure_session.set_runtime_client(client)
             return client
         except Exception as e:
             logger.error("Failed to login to Monarch Money: %s", e)
             raise
 
-    # No credentials anywhere — open browser login and tell the user
+    # 4. No credentials anywhere — open browser login and tell the user
     trigger_auth_flow()
     raise RuntimeError(
         "Authentication needed! A login page has been opened in your "

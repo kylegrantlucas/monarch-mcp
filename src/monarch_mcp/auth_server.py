@@ -210,8 +210,17 @@ async def with_auth_recovery(coro):
         return await coro
     except (TransportServerError, LoginFailedException) as exc:
         if is_auth_error(exc):
-            logger.warning("Token appears expired — clearing and triggering re-auth")
+            logger.warning("Token appears expired — clearing cached client and token")
+            secure_session.clear_runtime_client()
             secure_session.delete_token()
+            # Headless: when env credentials are configured, the next call
+            # re-authenticates automatically — don't open a browser no one
+            # can see. Just ask the caller to retry.
+            if os.getenv("MONARCH_EMAIL") and os.getenv("MONARCH_PASSWORD"):
+                raise RuntimeError(
+                    "Your Monarch session expired and was cleared. Please "
+                    "retry — it will re-authenticate automatically."
+                ) from exc
             trigger_auth_flow()
             raise RuntimeError(
                 "Your session has expired. A login page has been opened in "
