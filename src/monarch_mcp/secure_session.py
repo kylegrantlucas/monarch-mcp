@@ -101,6 +101,22 @@ class SecureMonarchSession:
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.warning("Could not clean up %s: %s", path, e)
 
+    # ── In-process client cache ──────────────────────────────────────────
+    # Cache the authenticated client after login so tools reuse one login
+    # instead of re-authenticating on every call. Cleared by the auth-
+    # recovery path when a token expires.
+    def set_runtime_client(self, client) -> None:
+        """Cache the authenticated client for reuse across tool calls."""
+        self._runtime_client = client
+
+    def get_runtime_client(self):
+        """Return the cached authenticated client, or None if not set."""
+        return getattr(self, "_runtime_client", None)
+
+    def clear_runtime_client(self) -> None:
+        """Drop the cached client (e.g. after an expired-token error)."""
+        self._runtime_client = None
+
 
 def is_auth_error(exc: Exception) -> bool:
     """Return True if the exception signals an expired or invalid auth token.
@@ -147,25 +163,3 @@ def is_auth_error(exc: Exception) -> bool:
 
 # Global session manager instance
 secure_session = SecureMonarchSession()
-
-
-# ── In-process client cache ─────────────────────────────────────────────
-# The authenticated MonarchMoney client is cached here after a successful
-# login so we don't re-authenticate on every tool call. The auth-recovery
-# path clears it when a token expires, forcing a fresh login on the next call.
-_runtime_client: dict = {"client": None}
-
-
-def set_runtime_client(client) -> None:
-    """Cache the authenticated client for reuse across tool calls."""
-    _runtime_client["client"] = client
-
-
-def get_runtime_client():
-    """Return the cached authenticated client, or None if not set."""
-    return _runtime_client["client"]
-
-
-def clear_runtime_client() -> None:
-    """Drop the cached client (e.g. after an expired-token error)."""
-    _runtime_client["client"] = None
